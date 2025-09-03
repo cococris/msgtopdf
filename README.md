@@ -6,8 +6,9 @@ Une API FastAPI robuste pour convertir les fichiers .msg Outlook en PDF avec val
 
 - **Conversion MSG vers PDF** : Convertit les emails Outlook (.msg) en documents PDF formatés
 - **Authentification JWT** : Validation des tokens JWT avec récupération des clés publiques via JWKS
-- **Fusion des pièces jointes** : Merge automatique des PDFs en pièces jointes avec le mail converti
-- **Filtrage des pièces jointes** : Accepte uniquement les PDFs, refuse les autres types de fichiers
+- **Fusion des pièces jointes** : Merge automatique des PDFs et images en pièces jointes avec le mail converti
+- **Support des images** : Conversion automatique des images (JPG, PNG, GIF, BMP, TIFF, WebP) en PDF
+- **Filtrage des pièces jointes** : Accepte les PDFs et images supportées, refuse les autres types de fichiers
 - **Logging complet** : Système de logging détaillé avec couleurs et niveaux configurables
 - **Tests unitaires** : Suite de tests complète avec pytest
 - **Documentation automatique** : Documentation Swagger/OpenAPI intégrée
@@ -126,6 +127,7 @@ Content-Type: multipart/form-data
 
 file: <fichier.msg>
 merge_attachments: true|false (optionnel, défaut: true)
+strict_mode: true|false (optionnel, défaut: false)
 ```
 
 **Exemple avec curl :**
@@ -134,12 +136,13 @@ curl -X POST "http://localhost:8000/convert" \
      -H "Authorization: Bearer YOUR_JWT_TOKEN" \
      -F "file=@email.msg" \
      -F "merge_attachments=true" \
+     -F "strict_mode=false" \
      --output converted.pdf
 ```
 
 **Réponse :**
 - **200 OK** : PDF généré (binaire)
-- **400 Bad Request** : Fichier invalide ou manquant
+- **400 Bad Request** : Fichier invalide, manquant ou pièces jointes non autorisées (en mode strict)
 - **401 Unauthorized** : Token JWT invalide
 - **413 Payload Too Large** : Fichier trop volumineux (>50MB)
 - **422 Unprocessable Entity** : Erreur de conversion
@@ -152,6 +155,67 @@ curl -X POST "http://localhost:8000/convert" \
 - `X-Attachments-Processed`: Nombre de PDFs fusionnés
 - `X-Original-Size`: Taille du fichier original
 - `X-Output-Size`: Taille du PDF généré
+
+### 📸 Support des Images
+
+L'API supporte maintenant la conversion automatique des images en pièces jointes vers PDF. Les formats supportés sont :
+
+- **JPEG** (.jpg, .jpeg)
+- **PNG** (.png)
+- **GIF** (.gif)
+- **BMP** (.bmp)
+- **TIFF** (.tiff, .tif)
+- **WebP** (.webp)
+
+**Fonctionnalités des images :**
+- Conversion automatique en PDF avec mise à l'échelle intelligente
+- Préservation de la qualité d'image optimisée pour PDF
+- Gestion des transparences (conversion avec fond blanc)
+- Adaptation automatique au format A4
+- Inclusion dans la fusion avec le mail principal
+
+**Exemple de conversion avec images :**
+```bash
+curl -X POST "http://localhost:8000/convert" \
+     -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+     -F "file=@email_avec_images.msg" \
+     -F "merge_attachments=true" \
+     --output converted_avec_images.pdf
+```
+
+### 🔒 Mode Strict
+
+Le **mode strict** permet de refuser complètement la conversion si le message contient des pièces jointes non autorisées.
+
+**Comportements :**
+- **Mode normal** (`strict_mode=false`) : Les pièces jointes non supportées sont ignorées, la conversion continue
+- **Mode strict** (`strict_mode=true`) : La conversion est refusée dès qu'une pièce jointe non autorisée est détectée
+
+**Types de fichiers autorisés :**
+- **PDFs** : `.pdf`
+- **Images** : `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`
+
+**Exemple en mode strict :**
+```bash
+curl -X POST "http://localhost:8000/convert" \
+     -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+     -F "file=@email_sensible.msg" \
+     -F "strict_mode=true" \
+     --output converted.pdf
+```
+
+**Réponse en cas de pièce jointe non autorisée :**
+```json
+{
+  "detail": "Pièces jointes non autorisées: document.docx, script.exe. Seuls les PDFs et images (JPG, PNG, GIF, BMP, TIFF, WebP) sont acceptés."
+}
+```
+
+**Cas d'usage du mode strict :**
+- Environnements sécurisés
+- Conformité réglementaire
+- Contrôle strict des types de fichiers
+- Prévention des risques de sécurité
 
 ## 🧪 Tests
 
@@ -283,6 +347,17 @@ Pour obtenir de l'aide :
 3. Ouvrez une issue sur GitHub
 
 ## 🔄 Changelog
+
+### v1.2.0
+- **Mode strict** : Refus de conversion en présence de pièces jointes non autorisées
+- Validation stricte des types de fichiers supportés
+- Gestion d'erreur spécifique pour les pièces jointes non autorisées
+- Tests complets du mode strict
+
+### v1.1.0
+- Support des images en pièces jointes (JPG, PNG, GIF, BMP, TIFF, WebP)
+- Conversion automatique des images en PDF
+- Amélioration des logs pour les pièces jointes
 
 ### v1.0.0
 - Conversion MSG vers PDF
