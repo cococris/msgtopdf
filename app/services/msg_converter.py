@@ -15,6 +15,7 @@ from reportlab.lib import colors
 from PyPDF2 import PdfReader, PdfWriter
 import io
 from datetime import datetime
+from PIL import Image
 
 from app.config import settings
 from app.logging_config import get_logger
@@ -27,6 +28,11 @@ class MSGConversionError(Exception):
     pass
 
 
+class UnauthorizedAttachmentError(MSGConversionError):
+    """Exception pour les pièces jointes non autorisées"""
+    pass
+
+
 class MSGConverter:
     """Service de conversion des fichiers .msg en PDF"""
     
@@ -36,40 +42,99 @@ class MSGConverter:
     
     def _setup_custom_styles(self):
         """Configure les styles personnalisés pour le PDF"""
-        # Style pour les en-têtes
+        # Style pour le titre principal
+        self.title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=self.styles['Heading1'],
+            fontSize=18,
+            spaceAfter=20,
+            spaceBefore=10,
+            textColor=colors.darkblue,
+            alignment=1,  # Centré
+            fontName='Helvetica-Bold'
+        )
+        
+        # Style pour les en-têtes de sections
         self.header_style = ParagraphStyle(
             'CustomHeader',
-            parent=self.styles['Heading1'],
-            fontSize=16,
-            spaceAfter=12,
-            textColor=colors.darkblue
+            parent=self.styles['Heading2'],
+            fontSize=14,
+            spaceAfter=8,
+            spaceBefore=15,
+            textColor=colors.darkblue,
+            fontName='Helvetica-Bold',
+            borderWidth=1,
+            borderColor=colors.lightgrey,
+            borderPadding=5,
+            backColor=colors.lightblue,
+            leftIndent=5,
+            rightIndent=5
         )
         
-        # Style pour les métadonnées
-        self.meta_style = ParagraphStyle(
-            'MetaData',
+        # Style pour les labels de métadonnées
+        self.meta_label_style = ParagraphStyle(
+            'MetaLabel',
             parent=self.styles['Normal'],
             fontSize=10,
-            spaceAfter=6,
-            textColor=colors.darkgrey
+            fontName='Helvetica-Bold',
+            textColor=colors.darkblue,
+            spaceAfter=3
         )
         
-        # Style pour le contenu
-        self.content_style = ParagraphStyle(
-            'Content',
+        # Style pour les valeurs de métadonnées
+        self.meta_value_style = ParagraphStyle(
+            'MetaValue',
+            parent=self.styles['Normal'],
+            fontSize=10,
+            spaceAfter=8,
+            leftIndent=0.3*inch,
+            textColor=colors.black
+        )
+        
+        # Style pour le corps de l'email
+        self.body_style = ParagraphStyle(
+            'EmailBody',
             parent=self.styles['Normal'],
             fontSize=11,
-            spaceAfter=12,
-            leftIndent=0.2*inch
+            spaceAfter=6,
+            spaceBefore=3,
+            leftIndent=0.1*inch,
+            rightIndent=0.1*inch,
+            textColor=colors.black,
+            leading=14
+        )
+        
+        # Style pour les paragraphes du corps
+        self.paragraph_style = ParagraphStyle(
+            'Paragraph',
+            parent=self.styles['Normal'],
+            fontSize=11,
+            spaceAfter=8,
+            spaceBefore=4,
+            leftIndent=0.1*inch,
+            rightIndent=0.1*inch,
+            textColor=colors.black,
+            leading=14
+        )
+        
+        # Style pour les séparateurs
+        self.separator_style = ParagraphStyle(
+            'Separator',
+            parent=self.styles['Normal'],
+            fontSize=1,
+            spaceAfter=10,
+            spaceBefore=10,
+            alignment=1
         )
     
-    def convert_msg_to_pdf(self, msg_file_path: str, request_id: str) -> Tuple[bytes, List[bytes]]:
+    def convert_msg_to_pdf(self, msg_file_path: str, request_id: str, strict_mode: bool = False) -> Tuple[bytes, List[bytes]]:
         """
         Convertit un fichier .msg en PDF et retourne les PDFs des pièces jointes
         
         Args:
             msg_file_path: Chemin vers le fichier .msg
             request_id: ID de la requête pour le logging
+            strict_mode: Si True, refuse la conversion si des pièces jointes non autorisées sont présentes
             
         Returns:
             Tuple contenant (PDF du mail, Liste des PDFs des pièces jointes)
@@ -80,15 +145,22 @@ class MSGConverter:
             # Extraction du message
             msg = extract_msg.Message(msg_file_path)
             
+            # Validation stricte des pièces jointes si activée
+            if strict_mode:
+                self._validate_attachments_strict(msg, request_id)
+            
             # Création du PDF principal
             main_pdf = self._create_main_pdf(msg, request_id)
             
             # Traitement des pièces jointes
-            attachment_pdfs = self._process_attachments(msg, request_id)
+            attachment_pdfs = self._process_attachments(msg, request_id, strict_mode)
             
             logger.info(f"[{request_id}] Conversion terminée avec succès")
             return main_pdf, attachment_pdfs
             
+        except UnauthorizedAttachmentError:
+            # Re-lancer l'UnauthorizedAttachmentError directement (ne pas l'encapsuler)
+            raise
         except Exception as e:
             logger.error(f"[{request_id}] Erreur lors de la conversion: {e}")
             raise MSGConversionError(f"Erreur de conversion: {e}")
@@ -103,58 +175,52 @@ class MSGConverter:
         logger.debug(f"[{request_id}] Création du PDF principal")
         
         buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            topMargin=0.8*inch,
+            bottomMargin=0.8*inch,
+            leftMargin=0.7*inch,
+            rightMargin=0.7*inch
+        )
         story = []
         
-        # En-tête du document
-        story.append(Paragraph("Email Outlook", self.header_style))
-        story.append(Spacer(1, 12))
+        # Titre principal du document
+        story.append(Paragraph("📧 Email Outlook", self.title_style))
+        story.append(self._create_separator())
         
-        # Métadonnées du message
-        metadata_table = self._create_metadata_table(msg)
-        story.append(metadata_table)
-        story.append(Spacer(1, 20))
+        # Section des informations de l'email
+        story.append(Paragraph("📋 Informations du message", self.header_style))
+        story.append(Spacer(1, 8))
         
-        # Contenu du message
+        # Métadonnées formatées individuellement
+        self._add_metadata_section(story, msg)
+        story.append(Spacer(1, 15))
+        
+        # Séparateur avant le contenu
+        story.append(self._create_separator())
+        
+        # Section du contenu du message
         if msg.body:
-            story.append(Paragraph("Contenu:", self.header_style))
-            story.append(Spacer(1, 6))
+            story.append(Paragraph("📄 Contenu du message", self.header_style))
+            story.append(Spacer(1, 10))
             
-            # Nettoyage et formatage du contenu
-            content = self._clean_content(msg.body)
-            for paragraph in content.split('\n\n'):
-                if paragraph.strip():
-                    story.append(Paragraph(paragraph.strip(), self.content_style))
-                    story.append(Spacer(1, 6))
+            # Formatage amélioré du contenu
+            self._add_email_body_section(story, msg.body)
+        else:
+            story.append(Paragraph("📄 Contenu du message", self.header_style))
+            story.append(Spacer(1, 8))
+            story.append(Paragraph("<i>Aucun contenu textuel disponible</i>", self.body_style))
+        
+        story.append(Spacer(1, 15))
         
         # Informations sur les pièces jointes
         if msg.attachments:
-            story.append(Spacer(1, 20))
-            story.append(Paragraph("Pièces jointes:", self.header_style))
-            story.append(Spacer(1, 6))
+            story.append(self._create_separator())
+            story.append(Paragraph("📎 Pièces jointes", self.header_style))
+            story.append(Spacer(1, 8))
             
-            attachment_data = []
-            for i, attachment in enumerate(msg.attachments):
-                attachment_data.append([
-                    str(i + 1),
-                    attachment.longFilename or attachment.shortFilename or "Sans nom",
-                    f"{len(attachment.data) if attachment.data else 0} bytes"
-                ])
-            
-            attachment_table = Table(
-                [["#", "Nom du fichier", "Taille"]] + attachment_data,
-                colWidths=[0.5*inch, 4*inch, 1.5*inch]
-            )
-            attachment_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black)
-            ]))
+            attachment_table = self._create_enhanced_attachment_table(msg.attachments)
             story.append(attachment_table)
         
         # Construction du PDF
@@ -162,23 +228,133 @@ class MSGConverter:
         buffer.seek(0)
         return buffer.getvalue()
     
-    def _create_metadata_table(self, msg: extract_msg.Message) -> Table:
-        """Crée un tableau avec les métadonnées du message"""
-        metadata = [
-            ["De:", msg.sender or "Non spécifié"],
-            ["À:", msg.to or "Non spécifié"],
-            ["CC:", msg.cc or ""],
-            ["Objet:", msg.subject or "Sans objet"],
-            ["Date:", self._format_date(msg.date)],
-        ]
+    def _create_separator(self):
+        """Crée une ligne de séparation"""
+        from reportlab.platypus import HRFlowable
+        return HRFlowable(width="100%", thickness=1, lineCap='round', color=colors.lightgrey, spaceBefore=5, spaceAfter=5)
+    
+    def _add_metadata_section(self, story, msg: extract_msg.Message):
+        """Ajoute la section des métadonnées de manière formatée"""
+        # De
+        if msg.sender:
+            story.append(Paragraph("👤 De :", self.meta_label_style))
+            story.append(Paragraph(f"{msg.sender}", self.meta_value_style))
         
-        table = Table(metadata, colWidths=[1*inch, 5*inch])
+        # À
+        if msg.to:
+            story.append(Paragraph("📧 À :", self.meta_label_style))
+            story.append(Paragraph(f"{msg.to}", self.meta_value_style))
+        
+        # CC
+        if msg.cc:
+            story.append(Paragraph("📋 CC :", self.meta_label_style))
+            story.append(Paragraph(f"{msg.cc}", self.meta_value_style))
+        
+        # Objet
+        story.append(Paragraph("📌 Objet :", self.meta_label_style))
+        story.append(Paragraph(f"{msg.subject or 'Sans objet'}", self.meta_value_style))
+        
+        # Date
+        story.append(Paragraph("📅 Date :", self.meta_label_style))
+        story.append(Paragraph(f"{self._format_date(msg.date)}", self.meta_value_style))
+    
+    def _add_email_body_section(self, story, body_text: str):
+        """Ajoute le contenu de l'email avec un formatage amélioré"""
+        if not body_text:
+            return
+        
+        # Nettoyage et formatage du contenu
+        content = self._clean_content(body_text)
+        
+        # Diviser le contenu en paragraphes plus intelligemment
+        paragraphs = []
+        current_paragraph = ""
+        
+        lines = content.split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line:  # Ligne vide
+                if current_paragraph:
+                    paragraphs.append(current_paragraph.strip())
+                    current_paragraph = ""
+            else:
+                if current_paragraph:
+                    current_paragraph += " " + line
+                else:
+                    current_paragraph = line
+        
+        # Ajouter le dernier paragraphe s'il existe
+        if current_paragraph:
+            paragraphs.append(current_paragraph.strip())
+        
+        # Ajouter chaque paragraphe au PDF
+        for i, paragraph in enumerate(paragraphs):
+            if paragraph:
+                # Échapper les caractères HTML pour éviter les erreurs
+                safe_paragraph = paragraph.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                story.append(Paragraph(safe_paragraph, self.paragraph_style))
+                
+                # Ajouter un espacement entre les paragraphes (pas après le dernier)
+                if i < len(paragraphs) - 1:
+                    story.append(Spacer(1, 4))
+    
+    def _create_enhanced_attachment_table(self, attachments) -> Table:
+        """Crée un tableau amélioré pour les pièces jointes"""
+        attachment_data = []
+        for i, attachment in enumerate(attachments):
+            filename = attachment.longFilename or attachment.shortFilename or "Sans nom"
+            file_size = len(attachment.data) if attachment.data else 0
+            
+            # Formatage de la taille
+            if file_size < 1024:
+                size_str = f"{file_size} bytes"
+            elif file_size < 1024 * 1024:
+                size_str = f"{file_size / 1024:.1f} KB"
+            else:
+                size_str = f"{file_size / (1024 * 1024):.1f} MB"
+            
+            # Déterminer le type de fichier
+            file_ext = filename.split('.')[-1].lower() if '.' in filename else "?"
+            if file_ext == 'pdf':
+                file_type = "📄 PDF"
+            elif file_ext in ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif', 'webp']:
+                file_type = "🖼️ Image"
+            else:
+                file_type = f"📁 {file_ext.upper()}"
+            
+            attachment_data.append([
+                str(i + 1),
+                file_type,
+                filename,
+                size_str
+            ])
+        
+        table = Table(
+            [["#", "Type", "Nom du fichier", "Taille"]] + attachment_data,
+            colWidths=[0.4*inch, 0.8*inch, 3.5*inch, 1*inch]
+        )
         table.setStyle(TableStyle([
+            # En-tête
+            ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+            ('TOPPADDING', (0, 0), (-1, 0), 8),
+            
+            # Corps du tableau
+            ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+            ('TOPPADDING', (0, 1), (-1, -1), 6),
+            
+            # Bordures
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('LINEBELOW', (0, 0), (-1, 0), 2, colors.darkblue),
+            
+            # Alternance de couleurs pour les lignes
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.lightgrey, colors.white])
         ]))
         
         return table
@@ -188,27 +364,45 @@ class MSGConverter:
         if not content:
             return ""
         
-        # Suppression des caractères de contrôle
+        # Suppression des caractères de contrôle (sauf retours à la ligne)
         content = ''.join(char for char in content if ord(char) >= 32 or char in '\n\r\t')
         
-        # Limitation de la longueur des lignes
+        # Nettoyage des espaces multiples et caractères indésirables
+        import re
+        content = re.sub(r' +', ' ', content)  # Remplace les espaces multiples par un seul
+        content = re.sub(r'\t+', ' ', content)  # Remplace les tabulations par des espaces
+        
+        # Suppression des lignes vides multiples consecutives
+        content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)
+        
+        # Suppression des espaces en début et fin de lignes
         lines = content.split('\n')
         cleaned_lines = []
+        
         for line in lines:
-            if len(line) > 100:
-                # Découpage des lignes trop longues
+            line = line.strip()
+            
+            # Gestion intelligente des longues lignes (découpage aux mots)
+            if len(line) > 80:  # Limite plus raisonnable pour la lisibilité
                 words = line.split(' ')
                 current_line = ""
+                
                 for word in words:
-                    if len(current_line + word) > 100:
-                        if current_line:
+                    # Si ajouter ce mot dépasse la limite
+                    if len(current_line + ' ' + word) > 80:
+                        if current_line:  # Si la ligne courante n'est pas vide
                             cleaned_lines.append(current_line.strip())
-                            current_line = word + " "
-                        else:
+                            current_line = word
+                        else:  # Le mot seul est trop long
                             cleaned_lines.append(word)
                             current_line = ""
                     else:
-                        current_line += word + " "
+                        if current_line:
+                            current_line += ' ' + word
+                        else:
+                            current_line = word
+                
+                # Ajouter la dernière ligne si elle n'est pas vide
                 if current_line:
                     cleaned_lines.append(current_line.strip())
             else:
@@ -228,7 +422,107 @@ class MSGConverter:
         except:
             return str(date)
     
-    def _process_attachments(self, msg: extract_msg.Message, request_id: str) -> List[bytes]:
+    def _convert_image_to_pdf(self, image_data: bytes, filename: str, request_id: str) -> bytes:
+        """Convertit une image en PDF"""
+        logger.debug(f"[{request_id}] Conversion de l'image {filename} en PDF")
+        
+        try:
+            # Ouvrir l'image avec Pillow
+            image = Image.open(io.BytesIO(image_data))
+            
+            # Convertir en RGB si nécessaire (pour gérer les images PNG avec transparence, etc.)
+            if image.mode != 'RGB':
+                # Créer un fond blanc pour les images avec transparence
+                if image.mode in ('RGBA', 'LA'):
+                    background = Image.new('RGB', image.size, (255, 255, 255))
+                    if image.mode == 'RGBA':
+                        background.paste(image, mask=image.split()[-1])  # Utilise le canal alpha comme masque
+                    else:
+                        background.paste(image, mask=image.split()[-1])
+                    image = background
+                else:
+                    image = image.convert('RGB')
+            
+            # Créer un PDF avec l'image
+            buffer = io.BytesIO()
+            
+            # Calculer les dimensions pour adapter l'image à la page A4
+            page_width, page_height = A4
+            img_width, img_height = image.size
+            
+            # Calculer le ratio pour adapter l'image sans déformation
+            ratio = min(page_width / img_width, page_height / img_height)
+            new_width = img_width * ratio
+            new_height = img_height * ratio
+            
+            # Créer le document PDF
+            doc = SimpleDocTemplate(buffer, pagesize=A4)
+            story = []
+            
+            # Ajouter un titre avec le nom du fichier
+            story.append(Paragraph(f"Image: {filename}", self.header_style))
+            story.append(Spacer(1, 12))
+            
+            # Sauvegarder temporairement l'image redimensionnée
+            temp_img_buffer = io.BytesIO()
+            resized_image = image.resize((int(new_width), int(new_height)), Image.Resampling.LANCZOS)
+            resized_image.save(temp_img_buffer, format='JPEG', quality=85)
+            temp_img_buffer.seek(0)
+            
+            # Ajouter l'image au PDF en utilisant reportlab
+            from reportlab.platypus import Image as RLImage
+            rl_image = RLImage(temp_img_buffer, width=new_width, height=new_height)
+            story.append(rl_image)
+            
+            # Construire le PDF
+            doc.build(story)
+            buffer.seek(0)
+            
+            result = buffer.getvalue()
+            logger.info(f"[{request_id}] Image {filename} convertie en PDF ({len(result)} bytes)")
+            return result
+            
+        except Exception as e:
+            logger.error(f"[{request_id}] Erreur lors de la conversion de l'image {filename}: {e}")
+            raise MSGConversionError(f"Erreur de conversion d'image {filename}: {e}")
+    
+    def _is_supported_image(self, filename: str) -> bool:
+        """Vérifie si le fichier est une image supportée"""
+        supported_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', '.webp'}
+        return Path(filename.lower()).suffix in supported_extensions
+    
+    def _is_supported_attachment(self, filename: str) -> bool:
+        """Vérifie si le fichier est une pièce jointe supportée (PDF ou image)"""
+        return filename.lower().endswith('.pdf') or self._is_supported_image(filename)
+    
+    def _validate_attachments_strict(self, msg: extract_msg.Message, request_id: str):
+        """Valide que toutes les pièces jointes sont autorisées en mode strict"""
+        if not msg.attachments:
+            return
+        
+        unauthorized_files = []
+        
+        for i, attachment in enumerate(msg.attachments):
+            try:
+                raw_filename = attachment.longFilename or attachment.shortFilename or f"attachment_{i}"
+                filename = raw_filename.rstrip('\x00').strip()
+                
+                if not self._is_supported_attachment(filename):
+                    unauthorized_files.append(filename)
+                    logger.warning(f"[{request_id}] ❌ Pièce jointe non autorisée détectée: {filename}")
+                    
+            except Exception as e:
+                logger.error(f"[{request_id}] ❌ Erreur lors de la validation de la pièce jointe {i}: {e}")
+                unauthorized_files.append(f"attachment_{i}")
+        
+        if unauthorized_files:
+            error_msg = f"Pièces jointes non autorisées détectées: {', '.join(unauthorized_files)}. Seuls les PDFs et images (JPG, PNG, GIF, BMP, TIFF, WebP) sont acceptés."
+            logger.error(f"[{request_id}] ❌ Conversion refusée en mode strict: {error_msg}")
+            raise UnauthorizedAttachmentError(error_msg)
+        
+        logger.info(f"[{request_id}] ✅ Toutes les pièces jointes sont autorisées ({len(msg.attachments)} fichiers validés)")
+    
+    def _process_attachments(self, msg: extract_msg.Message, request_id: str, strict_mode: bool = False) -> List[bytes]:
         """Traite les pièces jointes et retourne les PDFs"""
         pdf_attachments = []
         
@@ -253,17 +547,33 @@ class MSGConverter:
                         logger.info(f"[{request_id}] ✅ PDF ajouté pour fusion: {filename} ({len(attachment.data)} bytes)")
                     else:
                         logger.warning(f"[{request_id}] ⚠️ Pièce jointe PDF vide ignorée: {filename}")
+                elif self._is_supported_image(filename):
+                    if attachment.data and len(attachment.data) > 0:
+                        # Convertir l'image en PDF
+                        try:
+                            image_pdf = self._convert_image_to_pdf(attachment.data, filename, request_id)
+                            pdf_attachments.append(image_pdf)
+                            logger.info(f"[{request_id}] ✅ Image convertie et ajoutée pour fusion: {filename} ({len(image_pdf)} bytes)")
+                        except Exception as e:
+                            logger.error(f"[{request_id}] ❌ Erreur lors de la conversion de l'image {filename}: {e}")
+                            continue
+                    else:
+                        logger.warning(f"[{request_id}] ⚠️ Pièce jointe image vide ignorée: {filename}")
                 else:
-                    logger.info(f"[{request_id}] ❌ Type de fichier non-PDF ignoré: {filename}")
+                    if strict_mode:
+                        # En mode strict, cela ne devrait pas arriver car on a déjà validé
+                        logger.error(f"[{request_id}] ❌ ERREUR: Pièce jointe non autorisée détectée après validation: {filename}")
+                    else:
+                        logger.info(f"[{request_id}] ❌ Type de fichier non supporté ignoré: {filename}")
                     
             except Exception as e:
                 logger.error(f"[{request_id}] ❌ Erreur lors du traitement de la pièce jointe {i}: {e}")
                 continue
         
         if pdf_attachments:
-            logger.info(f"[{request_id}] 🎯 {len(pdf_attachments)} PDF(s) prêts pour la fusion")
+            logger.info(f"[{request_id}] 🎯 {len(pdf_attachments)} PDF(s) prêts pour la fusion (PDFs originaux + images converties)")
         else:
-            logger.info(f"[{request_id}] ❌ Aucun PDF trouvé dans les pièces jointes")
+            logger.info(f"[{request_id}] ❌ Aucun PDF ni image supportée trouvé dans les pièces jointes")
         
         return pdf_attachments
     

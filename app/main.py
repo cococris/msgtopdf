@@ -18,7 +18,7 @@ from app.config import settings
 from app.logging_config import setup_logging, get_logger, log_request_info, log_conversion_info, log_error
 from app.auth import get_current_user, get_user_id, JWTError
 from app.models import ConversionResponse, ErrorResponse, HealthResponse, UserInfo
-from app.services.msg_converter import MSGConverter, MSGConversionError
+from app.services.msg_converter import MSGConverter, MSGConversionError, UnauthorizedAttachmentError
 
 # Configuration du logging
 setup_logging()
@@ -107,14 +107,18 @@ async def get_user_info(current_user: Dict[str, Any] = Depends(get_current_user)
 @app.post("/convert", response_model=ConversionResponse, tags=["Conversion"])
 async def convert_msg_to_pdf(
     file: UploadFile = File(..., description="Fichier .msg à convertir"),
-    merge_attachments: bool = Form(default=True, description="Fusionner les PDFs en pièces jointes"),
+    merge_attachments: bool = Form(default=True, description="Fusionner les PDFs et images en pièces jointes"),
+    strict_mode: bool = Form(default=False, description="Mode strict: refuse la conversion si des pièces jointes non autorisées sont présentes"),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
     Convertit un fichier .msg Outlook en PDF
     
     - **file**: Fichier .msg à convertir (obligatoire)
-    - **merge_attachments**: Si True, fusionne les PDFs en pièces jointes avec le mail converti
+    - **merge_attachments**: Si True, fusionne les PDFs et images en pièces jointes avec le mail converti
+    - **strict_mode**: Si True, refuse la conversion si le message contient des pièces jointes non autorisées
+    
+    **Pièces jointes autorisées :** PDFs et images (JPG, PNG, GIF, BMP, TIFF, WebP)
     
     Retourne le PDF converti avec les métadonnées de conversion.
     """
@@ -163,7 +167,7 @@ async def convert_msg_to_pdf(
         logger.info(f"[{request_id}] Fichier temporaire créé: {temp_file_path}")
         
         # Conversion
-        main_pdf, attachment_pdfs = converter.convert_msg_to_pdf(temp_file_path, request_id)
+        main_pdf, attachment_pdfs = converter.convert_msg_to_pdf(temp_file_path, request_id, strict_mode)
         
         logger.info(f"[{request_id}] 📧 PDF principal créé: {len(main_pdf)} bytes")
         logger.info(f"[{request_id}] 📎 Pièces jointes PDF trouvées: {len(attachment_pdfs)}")
@@ -218,6 +222,13 @@ async def convert_msg_to_pdf(
             }
         )
         
+    except UnauthorizedAttachmentError as e:
+        # Erreur de pièces jointes non autorisées - code 400
+        log_error(request_id, e, {"filename": file.filename, "file_size": file_size})
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)  # Message direct sans préfixe
+        )
     except MSGConversionError as e:
         log_error(request_id, e, {"filename": file.filename, "file_size": file_size})
         raise HTTPException(
