@@ -19,9 +19,13 @@ class TestMSGConverter:
         """Test d'initialisation du convertisseur"""
         assert converter is not None
         assert hasattr(converter, 'styles')
+        assert hasattr(converter, 'title_style')
         assert hasattr(converter, 'header_style')
-        assert hasattr(converter, 'meta_style')
-        assert hasattr(converter, 'content_style')
+        assert hasattr(converter, 'meta_label_style')
+        assert hasattr(converter, 'meta_value_style')
+        assert hasattr(converter, 'body_style')
+        assert hasattr(converter, 'paragraph_style')
+        assert hasattr(converter, 'separator_style')
     
     def test_convert_msg_to_pdf_success(self, converter, mock_extract_msg):
         """Test de conversion réussie d'un fichier MSG"""
@@ -247,10 +251,20 @@ class TestMSGConverter:
             with pytest.raises(MSGConversionError, match="Erreur de fusion"):
                 converter.merge_pdfs(main_pdf, attachment_pdfs, request_id)
     
-    def test_create_metadata_table(self, converter, mock_extract_msg):
-        """Test de création du tableau de métadonnées"""
-        table = converter._create_metadata_table(mock_extract_msg)
+    def test_add_metadata_section(self, converter, mock_extract_msg):
+        """Test d'ajout de la section métadonnées"""
+        story = []
         
-        assert table is not None
-        # Vérification que la table contient les bonnes données
-        # (Les détails dépendent de l'implémentation de ReportLab)
+        # Configuration du message mocké
+        mock_extract_msg.sender = "sender@example.com"
+        mock_extract_msg.to = "recipient@example.com"
+        mock_extract_msg.cc = "cc@example.com"
+        mock_extract_msg.subject = "Test Subject"
+        mock_extract_msg.date = "2023-01-01 12:00:00"
+        
+        converter._add_metadata_section(story, mock_extract_msg)
+        
+        # Vérifier que des éléments ont été ajoutés à la story
+        assert len(story) > 0
+        # Vérifier qu'il y a au moins les éléments de base (labels + values)
+        assert len(story) >= 8  # De, À, CC, Objet, Date = 5 * 2 éléments minimum
