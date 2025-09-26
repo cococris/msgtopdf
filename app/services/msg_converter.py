@@ -177,17 +177,34 @@ class MSGConverter:
         self._add_metadata_section(story, msg)
         story.append(Spacer(1, 15))
         
+        # Créer une liste des pièces jointes images pour les placeholders
+        image_attachments = []
+        if msg.attachments:
+            for i, attachment in enumerate(msg.attachments):
+                filename = attachment.longFilename or attachment.shortFilename or f"attachment_{i}"
+                filename = filename.rstrip('\x00').strip()
+                if self._is_supported_image(filename):
+                    image_attachments.append(filename)
+        
         # Section du contenu du message
         if msg.body:
             story.append(Paragraph("Contenu du message", self.header_style))
             story.append(Spacer(1, 10))
             
-            # Formatage amélioré du contenu
-            self._add_email_body_section(story, msg.body)
+            # Formatage amélioré du contenu avec placeholders d'images
+            self._add_email_body_section(story, msg.body, image_attachments)
         else:
             story.append(Paragraph("Contenu du message", self.header_style))
             story.append(Spacer(1, 8))
             story.append(Paragraph("<i>Aucun contenu textuel disponible</i>", self.body_style))
+        
+        # Ajouter les placeholders d'images si pas de body ou si images pas référencées
+        if image_attachments:
+            story.append(Spacer(1, 10))
+            story.append(Paragraph("Images jointes à cet email :", self.header_style))
+            story.append(Spacer(1, 5))
+            for filename in image_attachments:
+                story.append(Paragraph(f"• <b>[IMAGE: {filename}]</b> - Voir pages suivantes", self.meta_style))
         
         story.append(Spacer(1, 15))
         
@@ -226,13 +243,33 @@ class MSGConverter:
         # Date
         story.append(Paragraph(f"<b>Date:</b> {self._format_date(msg.date)}", self.meta_style))
     
-    def _add_email_body_section(self, story, body_text: str):
-        """Ajoute le contenu de l'email avec un formatage amélioré"""
+    def _add_email_body_section(self, story, body_text: str, image_attachments: list = None):
+        """Ajoute le contenu de l'email avec un formatage amélioré et des placeholders d'images"""
         if not body_text:
             return
         
         # Nettoyage et formatage du contenu
         content = self._clean_content(body_text)
+        
+        # Rechercher et remplacer les références d'images communes dans le contenu
+        if image_attachments:
+            import re
+            for filename in image_attachments:
+                # Rechercher des références possibles à l'image dans le texte
+                pattern = re.compile(re.escape(filename), re.IGNORECASE)
+                placeholder = f"[IMAGE: {filename} - Voir pages suivantes]"
+                content = pattern.sub(placeholder, content)
+            
+            # Rechercher d'autres patterns d'images courantes
+            # Pattern pour les références d'images génériques
+            img_patterns = [
+                r'<img[^>]*>',  # Balises img HTML
+                r'\[image:[^\]]*\]',  # Format [image:...]
+                r'\[cid:[^\]]*\]'  # Content-ID references
+            ]
+            
+            for pattern in img_patterns:
+                content = re.sub(pattern, '[IMAGE - Voir pièces jointes]', content, flags=re.IGNORECASE)
         
         # Diviser le contenu en paragraphes plus intelligemment
         paragraphs = []
@@ -258,8 +295,12 @@ class MSGConverter:
         # Ajouter chaque paragraphe au PDF
         for i, paragraph in enumerate(paragraphs):
             if paragraph:
-                # Échapper les caractères HTML pour éviter les erreurs
+                # Échapper les caractères HTML pour éviter les erreurs (sauf nos placeholders)
                 safe_paragraph = paragraph.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                
+                # Remettre en gras nos placeholders d'images
+                safe_paragraph = safe_paragraph.replace('[IMAGE:', '<b>[IMAGE:').replace(']', ']</b>')
+                
                 story.append(Paragraph(safe_paragraph, self.paragraph_style))
                 
                 # Ajouter un espacement entre les paragraphes (pas après le dernier)
