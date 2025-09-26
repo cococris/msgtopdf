@@ -55,7 +55,7 @@ converter = MSGConverter()
 @app.on_event("startup")
 async def startup_event():
     """Événement de démarrage de l'application"""
-    logger.info("🚀 Démarrage de l'API MSG to PDF Converter")
+    logger.info("Démarrage de l'API MSG to PDF Converter")
     logger.info(f"Version: {settings.api_version}")
     logger.info(f"JWKS URL: {settings.jwks_url}")
     
@@ -63,15 +63,15 @@ async def startup_event():
     try:
         from app.auth import get_jwks
         get_jwks()
-        logger.info("✅ Connexion JWKS vérifiée")
+        logger.info("Connexion JWKS vérifiée")
     except Exception as e:
-        logger.warning(f"⚠️ Problème de connexion JWKS: {e}")
+        logger.warning(f"Problème de connexion JWKS: {e}")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Événement d'arrêt de l'application"""
-    logger.info("🛑 Arrêt de l'API MSG to PDF Converter")
+    logger.info("Arrêt de l'API MSG to PDF Converter")
 
 
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
@@ -169,22 +169,22 @@ async def convert_msg_to_pdf(
         # Conversion
         main_pdf, attachment_pdfs = converter.convert_msg_to_pdf(temp_file_path, request_id, strict_mode)
         
-        logger.info(f"[{request_id}] 📧 PDF principal créé: {len(main_pdf)} bytes")
-        logger.info(f"[{request_id}] 📎 Pièces jointes PDF trouvées: {len(attachment_pdfs)}")
+        logger.info(f"[{request_id}] PDF principal créé: {len(main_pdf)} bytes")
+        logger.info(f"[{request_id}] Pièces jointes PDF trouvées: {len(attachment_pdfs)}")
         
         # Fusion si demandée
         if merge_attachments:
             if attachment_pdfs:
-                logger.info(f"[{request_id}] 🔄 Fusion de {len(attachment_pdfs)} PDF(s) avec le mail principal...")
+                logger.info(f"[{request_id}] Fusion de {len(attachment_pdfs)} PDF(s) avec le mail principal...")
                 final_pdf = converter.merge_pdfs(main_pdf, attachment_pdfs, request_id)
                 attachments_count = len(attachment_pdfs)
-                logger.info(f"[{request_id}] ✅ Fusion terminée: {len(final_pdf)} bytes au total")
+                logger.info(f"[{request_id}] Fusion terminée: {len(final_pdf)} bytes au total")
             else:
-                logger.info(f"[{request_id}] ❌ Aucune pièce jointe PDF à fusionner")
+                logger.info(f"[{request_id}] Aucune pièce jointe PDF à fusionner")
                 final_pdf = main_pdf
                 attachments_count = 0
         else:
-            logger.info(f"[{request_id}] ⏭️ Fusion désactivée par l'utilisateur")
+            logger.info(f"[{request_id}] Fusion désactivée par l'utilisateur")
             final_pdf = main_pdf
             attachments_count = 0
         
